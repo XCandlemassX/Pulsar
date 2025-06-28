@@ -1,0 +1,285 @@
+name: Pulsar Auto-Build
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '**/*.cs'
+      - '**/*.csproj'
+      - '**/*.sln'
+      - '.github/workflows/auto-build.yml'
+
+jobs:
+  determine-branch:
+    runs-on: windows-latest
+    outputs:
+      build-branch: ${{ steps.set-branch.outputs.build-branch }}
+      version-changed: ${{ steps.check-version.outputs.version-changed }}
+      is-stable: ${{ steps.check-version.outputs.is-stable }}
+      version: ${{ steps.extract-version.outputs.version }}
+      commit-hash: ${{ steps.get-commit-hash.outputs.commit-hash }}
+      commit-message: ${{ steps.get-commit-hash.outputs.commit-message }}
+    
+    steps:
+      - name: Checkout repo (main)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-branch
+      
+      - name: Get main version
+        id: get-main-version
+        shell: pwsh
+        run: |
+          $filePath = "main-branch/Pulsar.Server/Properties/AssemblyInfo.cs"
+          $content = Get-Content $filePath -Raw
+          $versionMatch = [regex]::Match($content, '\[assembly: AssemblyVersion\("([0-9]+\.[0-9]+\.[0-9]+)"\)\]')
+          if ($versionMatch.Success) {
+            $mainVersion = $versionMatch.Groups[1].Value
+            echo "main-version=$mainVersion" >> $env:GITHUB_OUTPUT
+            echo "Main branch version: $mainVersion"
+          } else {
+            echo "main-version=unknown" >> $env:GITHUB_OUTPUT
+            echo "Could not find version in main branch"
+          }
+      
+      - name: Checkout repo (pushed branch)
+        uses: actions/checkout@v4
+        with:
+          path: current-branch
+      
+      - name: Extract current version
+        id: extract-version
+        shell: pwsh
+        run: |
+          $filePath = "current-branch/Pulsar.Server/Properties/AssemblyInfo.cs"
+          $content = Get-Content $filePath -Raw
+          $versionMatch = [regex]::Match($content, '\[assembly: AssemblyVersion\("([0-9]+\.[0-9]+\.[0-9]+)"\)\]')
+          if ($versionMatch.Success) {
+            $currentVersion = $versionMatch.Groups[1].Value
+            echo "version=$currentVersion" >> $env:GITHUB_OUTPUT
+            echo "Current version: $currentVersion"
+          } else {
+            echo "version=unknown" >> $env:GITHUB_OUTPUT
+            echo "Could not find version in current branch"
+          }
+      
+      - name: Get commit hash and message
+        id: get-commit-hash
+        shell: pwsh
+        run: |
+          $commitHash = git -C current-branch rev-parse --short HEAD
+          $commitMessage = git -C current-branch log -1 --pretty=%B
+          echo "commit-hash=$commitHash" >> $env:GITHUB_OUTPUT
+          echo "commit-message=$commitMessage" >> $env:GITHUB_OUTPUT
+          echo "Commit hash: $commitHash"
+          echo "Commit message: $commitMessage"
+      
+      - name: Check if stable release
+        id: check-version
+        shell: pwsh
+        run: |
+          $commitMessage = "${{ steps.get-commit-hash.outputs.commit-message }}"
+          
+          if ($commitMessage -match "^STABLE") {
+            echo "version-changed=true" >> $env:GITHUB_OUTPUT
+            echo "is-stable=true" >> $env:GITHUB_OUTPUT
+            echo "Stable release detected - commit message starts with 'STABLE'"
+          } else {
+            echo "version-changed=false" >> $env:GITHUB_OUTPUT
+            echo "is-stable=false" >> $env:GITHUB_OUTPUT
+            echo "Development build - commit message does not start with 'STABLE'"
+          }
+      - name: Set build branch
+        id: set-branch
+        shell: pwsh
+        run: |
+          echo "build-branch=main" >> $env:GITHUB_OUTPUT
+          echo "Building from main branch"
+
+  build:
+    needs: determine-branch
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      repository-projects: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.determine-branch.outputs.build-branch }}
+          submodules: true
+          fetch-depth: 0
+
+      - name: Build Information
+        shell: pwsh
+        run: |
+          Write-Host "Building from branch: ${{ needs.determine-branch.outputs.build-branch }}"
+          Write-Host "Version: ${{ needs.determine-branch.outputs.version }}"
+          Write-Host "Is stable release: ${{ needs.determine-branch.outputs.is-stable }}"
+          Write-Host "Commit: ${{ needs.determine-branch.outputs.commit-hash }}"
+          Write-Host "Commit message: ${{ needs.determine-branch.outputs.commit-message }}"
+
+      - name: Setup NuGet
+        uses: nuget/setup-nuget@v2
+
+      - name: Restore Dependencies
+        run: nuget restore Pulsar.sln
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v1
+
+      - name: Build Solution
+        run: msbuild Pulsar.sln /p:Configuration=Release
+        shell: cmd
+
+      - name: Zip Build Output
+        run: Compress-Archive -Path "${{ github.workspace }}\bin\Release\net472\*" -DestinationPath "build_output.zip"
+        shell: pwsh
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: build_output.zip
+
+          # Determine which type of release to create based on commit message
+      - name: Determine release type
+        id: release-type
+        shell: pwsh
+        run: |
+          $isStable = "${{ needs.determine-branch.outputs.is-stable }}"
+          
+          # Set default values
+          $createStable = "false"
+          $createDev = "false"
+          
+          if ($isStable -eq "true") {
+            # Commit message starts with STABLE - create stable build
+            $createStable = "true"
+            Write-Host "Creating stable build - commit message starts with 'STABLE'"
+          }
+          else {
+            # Create dev build in all other cases
+            $createDev = "true"
+            Write-Host "Creating dev build - commit message does not start with 'STABLE'"
+          }
+          
+          echo "create-stable=$createStable" >> $env:GITHUB_OUTPUT
+          echo "create-dev=$createDev" >> $env:GITHUB_OUTPUT
+
+      # Stable release steps
+      - name: Delete old stable release
+        if: steps.release-type.outputs.create-stable == 'true'
+        uses: dev-drprasad/delete-tag-and-release@v1.1
+        with:
+          tag_name: AutoBuild
+          delete_release: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create stable release
+        if: steps.release-type.outputs.create-stable == 'true'
+        id: create_stable_release
+        uses: actions/create-release@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: AutoBuild
+          release_name: Pulsar Stable
+          body: |
+            # Pulsar Stable Build
+            **Version:** ${{ needs.determine-branch.outputs.version }}
+            **Built from branch:** ${{ needs.determine-branch.outputs.build-branch }}
+            **Build date:** ${{ github.event.repository.updated_at }}
+            **Commit:** ${{ needs.determine-branch.outputs.commit-hash }}
+            **Commit message:** ${{ needs.determine-branch.outputs.commit-message }}
+            
+            This is the stable automated build triggered by a commit message starting with 'STABLE'.
+          draft: false
+          prerelease: false
+
+      - name: Upload stable release assets (build_output.zip)
+        if: steps.release-type.outputs.create-stable == 'true'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_stable_release.outputs.upload_url }}
+          asset_path: build_output.zip
+          asset_name: build_output.zip
+          asset_content_type: application/octet-stream
+
+      - name: Upload stable release asset (Pulsar.exe)
+        if: steps.release-type.outputs.create-stable == 'true'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_stable_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}\bin\Release\net472\Pulsar.exe
+          asset_name: DONT_DOWNLOAD_SERVER.exe
+          asset_content_type: application/octet-stream
+
+      - name: Upload stable release asset (client.bin)
+        if: steps.release-type.outputs.create-stable == 'true'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_stable_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}\bin\Release\net472\client.bin
+          asset_name: DONT_DOWNLOAD_CLIENT.bin
+          asset_content_type: application/octet-stream
+
+      - name: Upload stable release asset (setup.bat)
+        if: steps.release-type.outputs.create-stable == 'true'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_stable_release.outputs.upload_url }}
+          asset_path: ${{ github.workspace }}\setup.bat
+          asset_name: RUN_ME.bat
+          asset_content_type: application/octet-stream
+
+      # Dev release steps
+      - name: Delete old development release
+        if: steps.release-type.outputs.create-dev == 'true'
+        uses: dev-drprasad/delete-tag-and-release@v1.1
+        with:
+          tag_name: AutoBuild-Dev
+          delete_release: true
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create development release
+        if: steps.release-type.outputs.create-dev == 'true'
+        id: create_dev_release
+        uses: actions/create-release@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: AutoBuild-Dev
+          release_name: Pulsar Development
+          body: |
+            # Pulsar Development Build
+            **Version:** ${{ needs.determine-branch.outputs.version }} (Development)
+            **Built from branch:** ${{ needs.determine-branch.outputs.build-branch }}
+            **Build date:** ${{ github.event.repository.updated_at }}
+            **Commit:** ${{ needs.determine-branch.outputs.commit-hash }}
+            
+            This is the development build with the latest features and may be unstable.
+          draft: false
+          prerelease: true
+
+      - name: Upload dev release assets (build_output.zip)
+        if: steps.release-type.outputs.create-dev == 'true'
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_dev_release.outputs.upload_url }}
+          asset_path: build_output.zip
+          asset_name: build_output.zip
+          asset_content_type: application/octet-stream

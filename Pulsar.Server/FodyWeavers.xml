@@ -1,0 +1,34 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Weavers xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="FodyWeavers.xsd">
+	<Costura>
+		<IncludeAssemblies>
+			Pulsar.Common
+			DiscordRPC
+			dnlib
+			Mono.Cecil
+			Gma.System.MouseKeyHook
+			NAudio.Asio
+			NAudio.Core
+			NAudio.Midi
+			NAudio.Wasapi
+			NAudio.WinForms
+			NAudio.WinMM
+			Newtonsoft.Json
+			Open.NAT
+			BouncyCastle.Crypto
+			protobuf-net
+			System.IO.Compression.ZipFile
+			Vestris.ResourceLib
+			protobuf-net.Core
+			System.Memory
+			System.Runtime.CompilerServices.Unsafe
+			System.Resources.Extensions
+			System.Collections.Immutable
+			System.Numerics.Vectors
+			Microsoft.Bcl.HashCode
+			System.Formats.Nrbf
+			System.Reflection.Metadata
+			System.Buffers
+		</IncludeAssemblies>
+	</Costura>
+</Weavers>
