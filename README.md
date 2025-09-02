@@ -129,4 +129,3 @@ Pulsar is a tool for authorized system administration and research. Do not use i
 ## 🙏 Thank You!
 
 If you find this project useful, consider starring the repository and contributing improvements.
-
