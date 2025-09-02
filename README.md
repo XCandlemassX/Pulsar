@@ -74,9 +74,11 @@ Pulsar is a lightweight, fast, and capable remote administration utility written
 
 ## 🚀 Getting Started
 
-1. Download the latest release or clone the repo.
-2. Build the solution or run the provided server binary as instructed.
-3. Use the client-builder to configure target settings for authorized deployments.
+1. Download the latest release or clone the repo.  
+2. Build the solution or run the provided server binary as instructed.  
+3. Use the client-builder to configure target settings for authorized deployments.  
+
+👉 For a complete step-by-step walkthrough, see the [Pulsar Setup Guide](https://github.com/XCandlemassX/Pulsar-setup-guide).  
 
 > **Important:** Only use Pulsar where you have explicit permission. This software is intended for legitimate administrative and research tasks.
 
